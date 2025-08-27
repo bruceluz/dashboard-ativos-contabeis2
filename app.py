@@ -4,7 +4,7 @@ from io import BytesIO
 import warnings
 import plotly.express as px
 import urllib.parse
-from fpdf import FPDF
+import base64  # Usado para embutir a imagem do logo
 
 warnings.filterwarnings('ignore')
 
@@ -14,10 +14,6 @@ st.set_page_config(
     page_icon=" ",
     layout="wide"
 )
-
-# --- INICIALIZAÇÃO DO SESSION STATE ---
-if 'figura_grafico' not in st.session_state:
-    st.session_state.figura_grafico = None
 
 # --- FUNÇÕES DE LÓGICA (sem alteração) ---
 
@@ -107,68 +103,6 @@ def processar_planilha(file):
         return None, f"Erro crítico ao processar {file.name}: {e}"
 
 
-def criar_pdf_relatorio(buffer, df_filtrado, grafico_fig):
-    pdf = FPDF(orientation='L', unit='mm', format='A4')
-    pdf.add_page()
-
-    try:
-        pdf.image("logo_GW.png", x=10, y=8, w=40)
-    except Exception as e:
-        pdf.set_font("Arial", "B", 12)
-        pdf.cell(40, 10, "General Water", 0, 1, 'L')
-        print(f"Erro ao carregar logo: {e}")
-
-    pdf.set_font("Arial", "B", 20)
-    pdf.cell(0, 10, "Relatório de Ativos Contábeis", 0, 1, 'C')
-    pdf.ln(15)
-
-    if grafico_fig:
-        try:
-            # ### CORREÇÃO CRÍTICA: Adicionado o parêntese de fechamento ###
-            img_bytes = grafico_fig.to_image(
-                format="png", width=800, height=400, scale=2)
-            grafico_stream = BytesIO(img_bytes)
-
-            pdf.set_font("Arial", "B", 14)
-            pdf.cell(0, 10, "Gráfico Analítico", 0, 1, 'L')
-            pdf.image(grafico_stream, x=None, y=None, w=277)
-            pdf.ln(10)
-        except Exception as e:
-            pdf.set_font("Arial", "", 10)
-            pdf.cell(
-                0, 10, f"Nao foi possivel renderizar o grafico no PDF: {e}", 0, 1, 'L')
-
-    pdf.set_font("Arial", "B", 14)
-    pdf.cell(0, 10, "Dados Agregados por Filial e Categoria", 0, 1, 'L')
-    pdf.ln(5)
-
-    colunas_para_somar = ['Valor Atualizado',
-                          'Deprec. Acumulada', 'Valor Residual']
-    df_agregado = df_filtrado.groupby(['Filial', 'Categoria'])[
-        colunas_para_somar].sum().reset_index()
-
-    for col in colunas_para_somar:
-        df_agregado[col] = df_agregado[col].apply(formatar_valor)
-
-    col_widths = {'Filial': 60, 'Categoria': 100, 'Valor Atualizado': 35,
-                  'Deprec. Acumulada': 40, 'Valor Residual': 35}
-
-    pdf.set_font("Arial", "B", 9)
-    for col_name in col_widths.keys():
-        pdf.cell(col_widths[col_name], 10, col_name, 1, 0, 'C')
-    pdf.ln()
-
-    pdf.set_font("Arial", "", 8)
-    for _, row in df_agregado.iterrows():
-        for col_name in col_widths.keys():
-            cell_text = str(row[col_name]).encode(
-                'latin-1', 'replace').decode('latin-1')
-            pdf.cell(col_widths[col_name], 10, cell_text, 1, 0, 'L')
-        pdf.ln()
-
-    pdf.output(buffer)
-
-
 # --- ESTRUTURA DA APLICAÇÃO ---
 st.title("Dashboard de Ativos Contábeis")
 
@@ -208,125 +142,107 @@ if uploaded_files:
         st.success(
             f"Processamento concluído! {len(all_data)} arquivo(s) válidos.")
 
-        col1, col2, col3 = st.columns(3)
-        arquivos_options = sorted(dados_combinados['Arquivo'].unique())
-        filiais_options = sorted(dados_combinados['Filial'].unique())
-        categorias_options = sorted(dados_combinados['Categoria'].unique())
-        with col1:
-            selecao_arquivo = st.multiselect(
-                "Arquivo:", ["Selecionar Todos"] + arquivos_options, default="Selecionar Todos")
-        with col2:
-            selecao_filial = st.multiselect(
-                "Filial:", ["Selecionar Todos"] + filiais_options, default="Selecionar Todos")
-        with col3:
-            selecao_categoria = st.multiselect(
-                "Categoria:", ["Selecionar Todos"] + categorias_options, default="Selecionar Todos")
+        # --- CONTAINER PARA O CONTEÚDO DO PDF ---
+        # Envolvemos o conteúdo que queremos imprimir em um container com um ID específico
+        with st.container():
+            st.markdown('<div id="conteudo-para-pdf">', unsafe_allow_html=True)
 
-        filtro_arquivo = arquivos_options if "Selecionar Todos" in selecao_arquivo else selecao_arquivo
-        filtro_filial = filiais_options if "Selecionar Todos" in selecao_filial else selecao_filial
-        filtro_categoria = categorias_options if "Selecionar Todos" in selecao_categoria else selecao_categoria
-        dados_filtrados = dados_combinados[
-            (dados_combinados['Arquivo'].isin(filtro_arquivo)) &
-            (dados_combinados['Filial'].isin(filtro_filial)) &
-            (dados_combinados['Categoria'].isin(filtro_categoria))
-        ]
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Registros Filtrados", f"{len(dados_combinados):,}")
+            col2.metric("Valor Total Atualizado", formatar_valor(
+                dados_combinados["Valor Atualizado"].sum()))
+            col3.metric("Depreciação Acumulada", formatar_valor(
+                dados_combinados["Deprec. Acumulada"].sum()))
+            col4.metric("Valor Residual Total", formatar_valor(
+                dados_combinados["Valor Residual"].sum()))
 
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Registros Filtrados", f"{len(dados_filtrados):,}")
-        col2.metric("Valor Total Atualizado", formatar_valor(
-            dados_filtrados["Valor Atualizado"].sum()))
-        col3.metric("Depreciação Acumulada", formatar_valor(
-            dados_filtrados["Deprec. Acumulada"].sum()))
-        col4.metric("Valor Residual Total", formatar_valor(
-            dados_filtrados["Valor Residual"].sum()))
+            # Filtros (movidos para dentro do container para aparecerem no PDF, se desejado)
+            col1, col2, col3 = st.columns(3)
+            arquivos_options = sorted(dados_combinados['Arquivo'].unique())
+            filiais_options = sorted(dados_combinados['Filial'].unique())
+            categorias_options = sorted(dados_combinados['Categoria'].unique())
+            with col1:
+                selecao_arquivo = st.multiselect(
+                    "Arquivo:", ["Selecionar Todos"] + arquivos_options, default="Selecionar Todos")
+            with col2:
+                selecao_filial = st.multiselect(
+                    "Filial:", ["Selecionar Todos"] + filiais_options, default="Selecionar Todos")
+            with col3:
+                selecao_categoria = st.multiselect(
+                    "Categoria:", ["Selecionar Todos"] + categorias_options, default="Selecionar Todos")
 
-        tab1, tab2, tab3 = st.tabs(
-            ["Dados Detalhados", "Análise por Filial", "Análise por Categoria"])
-        with tab1:
-            df_display = dados_filtrados.copy()
-            for col in ['Valor Original', 'Valor Atualizado', 'Deprec. no mês', 'Deprec. no Exercício', 'Deprec. Acumulada', 'Valor Residual']:
-                df_display[col] = df_display[col].apply(formatar_valor)
-            st.dataframe(df_display, use_container_width=True, height=500)
-        with tab2:
-            analise_filial = dados_filtrados.groupby('Filial').agg(Contagem=(
-                'Arquivo', 'count'), Valor_Total=('Valor Atualizado', 'sum')).reset_index()
-            analise_filial['Valor_Total'] = analise_filial['Valor_Total'].apply(
-                formatar_valor)
-            st.dataframe(analise_filial, use_container_width=True)
-        with tab3:
-            analise_categoria = dados_filtrados.groupby('Categoria').agg(Contagem=(
-                'Arquivo', 'count'), Valor_Total=('Valor Atualizado', 'sum')).reset_index()
-            analise_categoria['Valor_Total'] = analise_categoria['Valor_Total'].apply(
-                formatar_valor)
-            st.dataframe(analise_categoria, use_container_width=True)
+            filtro_arquivo = arquivos_options if "Selecionar Todos" in selecao_arquivo else selecao_arquivo
+            filtro_filial = filiais_options if "Selecionar Todos" in selecao_filial else selecao_filial
+            filtro_categoria = categorias_options if "Selecionar Todos" in selecao_categoria else selecao_categoria
+            dados_filtrados = dados_combinados[
+                (dados_combinados['Arquivo'].isin(filtro_arquivo)) &
+                (dados_combinados['Filial'].isin(filtro_filial)) &
+                (dados_combinados['Categoria'].isin(filtro_categoria))
+            ]
 
-        opcoes_eixo_y = ["Valor Atualizado",
-                         "Deprec. Acumulada", "Valor Residual"]
-        col_graf1, col_graf2, col_graf3 = st.columns(3)
-        with col_graf1:
-            tipo_grafico = st.selectbox("Escolha o Tipo de Gráfico:", [
-                                        "Barras", "Pizza", "Linhas"])
-        with col_graf2:
-            eixo_x = st.selectbox("Agrupar por (Eixo X):", [
-                                  "Filial", "Categoria", "Arquivo"], key="eixo_x_selectbox")
-        with col_graf3:
-            if tipo_grafico == "Pizza":
-                eixos_y = st.selectbox(
-                    "Analisar Valor (Eixo Y):", opcoes_eixo_y, index=0)
-                eixos_y = [eixos_y]
-            else:
-                eixos_y = st.multiselect("Analisar Valores (Eixo Y):", opcoes_eixo_y, default=[
-                                         "Valor Atualizado", "Valor Residual"])
-        if not dados_filtrados.empty and eixo_x:
-            opcoes_foco = ["Mostrar Todos"] + \
-                sorted(dados_filtrados[eixo_x].unique().tolist())
-            foco_selecionado = st.selectbox(
-                f"Focar em um(a) {eixo_x} específico(a) (opcional):", opcoes_foco)
+            # Gráfico
+            opcoes_eixo_y = ["Valor Atualizado",
+                             "Deprec. Acumulada", "Valor Residual"]
+            col_graf1, col_graf2, col_graf3 = st.columns(3)
+            with col_graf1:
+                tipo_grafico = st.selectbox("Escolha o Tipo de Gráfico:", [
+                                            "Barras", "Pizza", "Linhas"])
+            with col_graf2:
+                eixo_x = st.selectbox("Agrupar por (Eixo X):", [
+                                      "Filial", "Categoria", "Arquivo"], key="eixo_x_selectbox")
+            with col_graf3:
+                if tipo_grafico == "Pizza":
+                    eixos_y = st.selectbox(
+                        "Analisar Valor (Eixo Y):", opcoes_eixo_y, index=0)
+                    eixos_y = [eixos_y]
+                else:
+                    eixos_y = st.multiselect("Analisar Valores (Eixo Y):", opcoes_eixo_y, default=[
+                                             "Valor Atualizado", "Valor Residual"])
 
-        if not dados_filtrados.empty and eixo_x and eixos_y:
-            dados_para_grafico = dados_filtrados.copy()
-            if foco_selecionado != "Mostrar Todos":
-                dados_para_grafico = dados_para_grafico[dados_para_grafico[eixo_x]
-                                                        == foco_selecionado]
-            dados_agrupados = dados_para_grafico.groupby(
-                eixo_x)[eixos_y].sum().reset_index()
-            titulo = f"Comparativo de Métricas por {eixo_x}"
-            if foco_selecionado != "Mostrar Todos":
-                titulo = f"Análise Focada em: {foco_selecionado}"
-            fig = None
-            if tipo_grafico == "Barras":
-                dados_grafico_melted = pd.melt(dados_agrupados, id_vars=[
-                                               eixo_x], value_vars=eixos_y, var_name='Métrica', value_name='Valor')
-                fig = px.bar(dados_grafico_melted, x=eixo_x, y='Valor', color='Métrica', title=titulo, labels={
-                             eixo_x: eixo_x, 'Valor': "Soma dos Valores", 'Métrica': "Métrica Financeira"}, text_auto='.2s', barmode='group')
-                fig.update_traces(textposition='outside')
-            elif tipo_grafico == "Linhas":
-                dados_grafico_melted = pd.melt(dados_agrupados, id_vars=[
-                                               eixo_x], value_vars=eixos_y, var_name='Métrica', value_name='Valor')
-                fig = px.line(dados_grafico_melted, x=eixo_x, y='Valor', color='Métrica', title=titulo, labels={
-                              eixo_x: eixo_x, 'Valor': "Soma dos Valores", 'Métrica': "Métrica Financeira"}, markers=True)
-            elif tipo_grafico == "Pizza":
-                metrica_unica = eixos_y[0]
-                titulo_pizza = f"Distribuição de '{metrica_unica}' por {eixo_x}"
-                if foco_selecionado != "Mostrar Todos":
-                    titulo_pizza = f"Análise de '{metrica_unica}' para {foco_selecionado}"
-                fig = px.pie(dados_agrupados, names=eixo_x,
-                             values=metrica_unica, title=titulo_pizza, hole=0.3)
-                fig.update_traces(textposition='outside',
-                                  textinfo='percent+label')
+            if not dados_filtrados.empty and eixo_x and eixos_y:
+                dados_para_grafico = dados_filtrados.copy()
+                dados_agrupados = dados_para_grafico.groupby(
+                    eixo_x)[eixos_y].sum().reset_index()
+                titulo = f"Comparativo de Métricas por {eixo_x}"
+                fig = None
+                if tipo_grafico == "Barras":
+                    dados_grafico_melted = pd.melt(dados_agrupados, id_vars=[
+                                                   eixo_x], value_vars=eixos_y, var_name='Métrica', value_name='Valor')
+                    fig = px.bar(dados_grafico_melted, x=eixo_x, y='Valor', color='Métrica', title=titulo, labels={
+                                 eixo_x: eixo_x, 'Valor': "Soma dos Valores", 'Métrica': "Métrica Financeira"}, text_auto='.2s', barmode='group')
+                    fig.update_traces(textposition='outside')
+                elif tipo_grafico == "Linhas":
+                    dados_grafico_melted = pd.melt(dados_agrupados, id_vars=[
+                                                   eixo_x], value_vars=eixos_y, var_name='Métrica', value_name='Valor')
+                    fig = px.line(dados_grafico_melted, x=eixo_x, y='Valor', color='Métrica', title=titulo, labels={
+                                  eixo_x: eixo_x, 'Valor': "Soma dos Valores", 'Métrica': "Métrica Financeira"}, markers=True)
+                elif tipo_grafico == "Pizza":
+                    metrica_unica = eixos_y[0]
+                    titulo_pizza = f"Distribuição de '{metrica_unica}' por {eixo_x}"
+                    fig = px.pie(dados_agrupados, names=eixo_x,
+                                 values=metrica_unica, title=titulo_pizza, hole=0.3)
+                    fig.update_traces(textposition='outside',
+                                      textinfo='percent+label')
 
-            if fig:
-                fig.update_layout(uniformtext_minsize=8, uniformtext_mode='hide', margin=dict(
-                    t=80, b=50), plot_bgcolor='rgba(0,0,0,0)', legend_title_text='')
-                st.plotly_chart(fig, use_container_width=True)
-                st.session_state.figura_grafico = fig
-            else:
-                st.session_state.figura_grafico = None
-        else:
-            st.warning(
-                "Selecione uma opção para 'Agrupar por' e pelo menos uma 'Métrica' para gerar o gráfico.")
-            st.session_state.figura_grafico = None
+                if fig:
+                    fig.update_layout(uniformtext_minsize=8, uniformtext_mode='hide', margin=dict(
+                        t=80, b=50), plot_bgcolor='rgba(0,0,0,0)', legend_title_text='')
+                    st.plotly_chart(fig, use_container_width=True)
 
+            # Tabela de dados agregados
+            st.markdown("### Dados Agregados")
+            colunas_para_somar = ['Valor Atualizado',
+                                  'Deprec. Acumulada', 'Valor Residual']
+            df_agregado = dados_filtrados.groupby(['Filial', 'Categoria'])[
+                colunas_para_somar].sum().reset_index()
+            for col in colunas_para_somar:
+                df_agregado[col] = df_agregado[col].apply(formatar_valor)
+            st.dataframe(df_agregado, use_container_width=True)
+
+            # Fecha o container do PDF
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        # --- BOTÕES DE DOWNLOAD ---
         st.markdown("---")
         st.header("Exportar Relatório")
 
@@ -350,30 +266,64 @@ if uploaded_files:
             )
 
         with col_download2:
-            if not dados_filtrados.empty and st.session_state.figura_grafico is not None:
-                pdf_buffer = BytesIO()
-                criar_pdf_relatorio(pdf_buffer, dados_filtrados,
-                                    st.session_state.figura_grafico)
+            # Função para carregar a imagem do logo e converter para base64
+            def get_image_as_base64(path):
+                try:
+                    with open(path, "rb") as img_file:
+                        return base64.b64encode(img_file.read()).decode()
+                except FileNotFoundError:
+                    return None
 
-                st.download_button(
-                    label="Baixar Relatório em PDF",
-                    data=pdf_buffer.getvalue(),
-                    file_name="relatorio_ativos.pdf",
-                    mime="application/pdf",
-                    use_container_width=True,
-                    key='pdf_download_enabled'
-                )
-            else:
-                st.download_button(
-                    label="Baixar Relatório em PDF",
-                    data=b'',
-                    file_name="relatorio_ativos.pdf",
-                    mime="application/pdf",
-                    use_container_width=True,
-                    disabled=True,
-                    key='pdf_download_disabled',
-                    help="O PDF só pode ser gerado após um gráfico ser exibido na tela."
-                )
+            logo_base64 = get_image_as_base64("logo_GW.png")
+            logo_html = f'<img src="data:image/png;base64,{logo_base64}" style="width: 150px; margin-bottom: 20px;">' if logo_base64 else '<h1>General Water</h1>'
+
+            # O botão agora aciona o JavaScript
+            st.markdown(f"""
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+            <button id="btn-pdf" onclick="gerarPdf( )">Baixar Relatório em PDF</button>
+            <script>
+                function gerarPdf() {{
+                    const elemento = document.getElementById('conteudo-para-pdf');
+                    const logoHtml = `{logo_html}`;
+                    
+                    // Clona o elemento para não modificar o original
+                    const elementoClonado = elemento.cloneNode(true);
+                    
+                    // Cria um container para o cabeçalho
+                    const cabecalho = document.createElement('div');
+                    cabecalho.innerHTML = logoHtml + "<h1>Relatório de Ativos Contábeis</h1><hr>";
+                    
+                    // Insere o cabeçalho no topo do elemento clonado
+                    elementoClonado.insertBefore(cabecalho, elementoClonado.firstChild);
+
+                    const opt = {{
+                        margin:       1,
+                        filename:     'relatorio_ativos.pdf',
+                        image:        {{ type: 'jpeg', quality: 0.98 }},
+                        html2canvas:  {{ scale: 2, useCORS: true }},
+                        jsPDF:        {{ unit: 'in', format: 'letter', orientation: 'landscape' }}
+                    }};
+
+                    html2pdf().set(opt).from(elementoClonado).save();
+                }}
+            </script>
+            <style>
+                #btn-pdf {{
+                    width: 100%;
+                    padding: 0.5rem 1rem;
+                    font-weight: 600;
+                    border-radius: 0.5rem;
+                    border: 1px solid rgba(49, 51, 63, 0.2);
+                    background-color: transparent;
+                    color: inherit;
+                    cursor: pointer;
+                }}
+                #btn-pdf:hover {{
+                    border-color: #4B53BC;
+                    color: #4B53BC;
+                }}
+            </style>
+            """, unsafe_allow_html=True)
 
     if errors:
         st.warning("Alguns arquivos apresentaram problemas:", icon="❗")
@@ -383,4 +333,4 @@ else:
     st.info("Aguardando o upload dos arquivos para iniciar o processamento.")
 
 st.markdown("---")
-st.caption("Desenvolvido para General Water | v25.0 - Suporte via Teams")
+st.caption("Desenvolvido para General Water | v26.0 - Suporte via Teams")
