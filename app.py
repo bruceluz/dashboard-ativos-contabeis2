@@ -15,11 +15,6 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- INICIALIZAÇÃO DO SESSION STATE ---
-# Garante que a variável exista desde o início
-if 'figura_grafico' not in st.session_state:
-    st.session_state.figura_grafico = None
-
 # --- FUNÇÕES DE LÓGICA (sem alteração) ---
 
 
@@ -125,6 +120,8 @@ def criar_pdf_relatorio(buffer, df_filtrado, grafico_fig):
 
     if grafico_fig:
         try:
+            # ALTERAÇÃO CRÍTICA: Força o uso do motor 'chromium' que instalamos via packages.txt
+            # Esta linha pode demorar um pouco mais na primeira vez que for executada.
             img_bytes = grafico_fig.to_image(
                 format="png", width=800, height=400, scale=2)
             grafico_stream = BytesIO(img_bytes)
@@ -191,6 +188,9 @@ with st.sidebar:
 uploaded_files = st.file_uploader("Escolha os arquivos Excel de ativos", type=[
                                   'xlsx', 'xls'], accept_multiple_files=True)
 
+if 'figura_grafico' not in st.session_state:
+    st.session_state.figura_grafico = None
+
 if uploaded_files:
     all_data, errors = [], []
     progress_bar = st.progress(0, text="Iniciando...")
@@ -246,7 +246,10 @@ if uploaded_files:
             df_display = dados_filtrados.copy()
             for col in ['Valor Original', 'Valor Atualizado', 'Deprec. no mês', 'Deprec. no Exercício', 'Deprec. Acumulada', 'Valor Residual']:
                 df_display[col] = df_display[col].apply(formatar_valor)
-            st.dataframe(df_display, use_container_width=True, height=500)
+            # ALTERAÇÃO: Substituindo use_container_width
+            # Mantido por compatibilidade, mas o ideal é remover
+            st.dataframe(df_display, width=None, height=500,
+                         use_container_width=True)
         with tab2:
             analise_filial = dados_filtrados.groupby('Filial').agg(Contagem=(
                 'Arquivo', 'count'), Valor_Total=('Valor Atualizado', 'sum')).reset_index()
@@ -282,8 +285,6 @@ if uploaded_files:
                 sorted(dados_filtrados[eixo_x].unique().tolist())
             foco_selecionado = st.selectbox(
                 f"Focar em um(a) {eixo_x} específico(a) (opcional):", opcoes_foco)
-
-        # Lógica de geração do gráfico
         if not dados_filtrados.empty and eixo_x and eixos_y:
             dados_para_grafico = dados_filtrados.copy()
             if foco_selecionado != "Mostrar Todos":
@@ -315,19 +316,16 @@ if uploaded_files:
                              values=metrica_unica, title=titulo_pizza, hole=0.3)
                 fig.update_traces(textposition='outside',
                                   textinfo='percent+label')
-
             if fig:
                 fig.update_layout(uniformtext_minsize=8, uniformtext_mode='hide', margin=dict(
                     t=80, b=50), plot_bgcolor='rgba(0,0,0,0)', legend_title_text='')
                 st.plotly_chart(fig, use_container_width=True)
-                st.session_state.figura_grafico = fig  # A figura é salva na sessão AQUI
+                st.session_state.figura_grafico = fig
             else:
                 st.session_state.figura_grafico = None
         else:
             st.warning(
                 "Selecione uma opção para 'Agrupar por' e pelo menos uma 'Métrica' para gerar o gráfico.")
-            # Garante que a figura seja None se não houver gráfico
-            st.session_state.figura_grafico = None
 
         st.markdown("---")
         st.header("Exportar Relatório")
@@ -351,33 +349,27 @@ if uploaded_files:
                 use_container_width=True
             )
 
-        # --- LÓGICA DO BOTÃO PDF CORRIGIDA ---
         with col_download2:
-            # A condição agora é mais simples: há dados e um gráfico foi gerado?
-            if not dados_filtrados.empty and st.session_state.figura_grafico is not None:
+            if not dados_filtrados.empty and st.session_state.figura_grafico:
                 pdf_buffer = BytesIO()
                 criar_pdf_relatorio(pdf_buffer, dados_filtrados,
                                     st.session_state.figura_grafico)
 
                 st.download_button(
-                    label="📄 Baixar Relatório em PDF",
+                    label="Baixar Relatório em PDF",
                     data=pdf_buffer.getvalue(),
                     file_name="relatorio_ativos.pdf",
                     mime="application/pdf",
-                    use_container_width=True,
-                    key='pdf_download_enabled'  # Adiciona uma chave para evitar problemas de estado
+                    use_container_width=True
                 )
             else:
-                # Se não, mostramos o botão desabilitado com uma dica.
                 st.download_button(
-                    label="📄 Baixar Relatório em PDF",
+                    label="Baixar Relatório em PDF",
                     data=b'',
                     file_name="relatorio_ativos.pdf",
                     mime="application/pdf",
                     use_container_width=True,
-                    disabled=True,
-                    key='pdf_download_disabled',
-                    help="O PDF só pode ser gerado após um gráfico ser exibido na tela."
+                    disabled=True
                 )
 
     if errors:
@@ -388,4 +380,4 @@ else:
     st.info("Aguardando o upload dos arquivos para iniciar o processamento.")
 
 st.markdown("---")
-st.caption("Desenvolvido para General Water | v24.0 - Suporte via Teams")
+st.caption("Desenvolvido para General Water | v23.0 - Suporte via Teams")
