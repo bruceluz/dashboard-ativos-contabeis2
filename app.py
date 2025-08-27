@@ -126,7 +126,7 @@ def criar_pdf_relatorio(buffer, df_filtrado, grafico_fig):
     if grafico_fig:
         try:
             img_bytes = grafico_fig.to_image(
-                format="png", width=800, height=400, scale=2, engine="chromium")
+                format="png", width=800, height=400, scale=2)
             grafico_stream = BytesIO(img_bytes)
 
             pdf.set_font("Arial", "B", 14)
