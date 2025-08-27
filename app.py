@@ -5,8 +5,8 @@ import warnings
 import plotly.express as px
 import urllib.parse
 from fpdf import FPDF
-import matplotlib.pyplot as plt  # Nova importação
-import matplotlib.ticker as mticker  # Para formatar os eixos do gráfico
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
 
 warnings.filterwarnings('ignore')
 
@@ -116,14 +116,11 @@ def processar_planilha(file):
     except Exception as e:
         return None, f"Erro crítico ao processar {file.name}: {e}"
 
-# --- NOVA FUNÇÃO PARA GERAR PDF COM MATPLOTLIB ---
-
 
 def criar_pdf_completo(buffer, df_filtrado, dados_grafico, tipo_grafico, eixo_x, eixos_y):
     pdf = FPDF(orientation='L', unit='mm', format='A4')
     pdf.add_page()
 
-    # 1. Logo e Título
     try:
         pdf.image("logo_GW.png", x=10, y=8, w=40)
     except Exception:
@@ -133,18 +130,17 @@ def criar_pdf_completo(buffer, df_filtrado, dados_grafico, tipo_grafico, eixo_x,
     pdf.cell(0, 10, "Relatório de Ativos Contábeis", 0, 1, 'C')
     pdf.ln(15)
 
-    # 2. Gerar Gráfico com Matplotlib
     if dados_grafico is not None:
         try:
-            fig, ax = plt.subplots(figsize=(11, 5))  # Tamanho para paisagem A4
+            fig, ax = plt.subplots(figsize=(11, 5))
 
-            if tipo_grafico == 'Barras' or tipo_grafico == 'Linhas':
-                dados_grafico.plot(
+            if tipo_grafico in ['Barras', 'Linhas']:
+                # Para Matplotlib, é melhor ter o eixo X como índice para plotagem de múltiplas colunas
+                df_plot = dados_grafico.set_index(eixo_x)
+                df_plot.plot(
                     kind='bar' if tipo_grafico == 'Barras' else 'line',
-                    x=eixo_x,
-                    y=eixos_y,
                     ax=ax,
-                    rot=45,  # Rotaciona os labels do eixo X
+                    rot=45,
                     grid=True
                 )
                 ax.set_title(f'Análise por {eixo_x}')
@@ -162,19 +158,16 @@ def criar_pdf_completo(buffer, df_filtrado, dados_grafico, tipo_grafico, eixo_x,
                     startangle=90
                 )
                 ax.set_title(f'Distribuição de {metrica_unica} por {eixo_x}')
-                ax.axis('equal')  # Garante que a pizza seja um círculo
+                ax.axis('equal')
 
             plt.tight_layout()
 
-            # Salva o gráfico em um buffer de memória
             img_buffer = BytesIO()
             fig.savefig(img_buffer, format='png', dpi=300)
             img_buffer.seek(0)
 
-            # Insere a imagem no PDF
             pdf.set_font("Arial", "B", 14)
             pdf.cell(0, 10, "Gráfico Analítico", 0, 1, 'L')
-            # Largura total da página
             pdf.image(img_buffer, x=None, y=None, w=277)
             pdf.ln(5)
 
@@ -183,9 +176,8 @@ def criar_pdf_completo(buffer, df_filtrado, dados_grafico, tipo_grafico, eixo_x,
             pdf.cell(
                 0, 10, f"Nao foi possivel renderizar o grafico no PDF: {e}", 0, 1, 'L')
         finally:
-            plt.close(fig)  # Fecha a figura para liberar memória
+            plt.close(fig)
 
-    # 3. Tabela de Dados
     pdf.set_font("Arial", "B", 14)
     pdf.cell(0, 10, "Dados Agregados por Filial e Categoria", 0, 1, 'L')
     pdf.ln(5)
@@ -281,7 +273,30 @@ if uploaded_files:
         col4.metric("Valor Residual Total", formatar_valor(
             dados_filtrados["Valor Residual"].sum()))
 
-        # ... (código das abas de tabela permanece o mesmo) ...
+        # ### CÓDIGO DAS ABAS RESTAURADO ###
+        tab1, tab2, tab3 = st.tabs(
+            ["Dados Detalhados", "Análise por Filial", "Análise por Categoria"])
+        with tab1:
+            df_display = dados_filtrados.copy()
+            for col in ['Valor Original', 'Valor Atualizado', 'Deprec. no mês', 'Deprec. no Exercício', 'Deprec. Acumulada', 'Valor Residual']:
+                df_display[col] = df_display[col].apply(formatar_valor)
+            st.dataframe(df_display, use_container_width=True, height=500)
+        with tab2:
+            analise_filial = dados_filtrados.groupby('Filial').agg(Contagem=(
+                'Arquivo', 'count'), Valor_Total=('Valor Atualizado', 'sum')).reset_index()
+            analise_filial['Valor_Total'] = analise_filial['Valor_Total'].apply(
+                formatar_valor)
+            st.dataframe(analise_filial, use_container_width=True)
+        with tab3:
+            analise_categoria = dados_filtrados.groupby('Categoria').agg(Contagem=(
+                'Arquivo', 'count'), Valor_Total=('Valor Atualizado', 'sum')).reset_index()
+            analise_categoria['Valor_Total'] = analise_categoria['Valor_Total'].apply(
+                formatar_valor)
+            st.dataframe(analise_categoria, use_container_width=True)
+        # ### FIM DO BLOCO RESTAURADO ###
+
+        st.markdown("---")
+        st.header("Gráfico Interativo")
 
         opcoes_eixo_y = ["Valor Atualizado",
                          "Deprec. Acumulada", "Valor Residual"]
@@ -305,7 +320,6 @@ if uploaded_files:
             dados_agrupados = dados_filtrados.groupby(
                 eixo_x)[eixos_y].sum().reset_index()
 
-            # Gera o gráfico com Plotly para a tela
             fig_plotly = None
             if tipo_grafico == "Barras":
                 dados_grafico_melted = pd.melt(dados_agrupados, id_vars=[
@@ -330,13 +344,14 @@ if uploaded_files:
                     t=80, b=50), plot_bgcolor='rgba(0,0,0,0)', legend_title_text='')
                 st.plotly_chart(fig_plotly, use_container_width=True)
 
-                # Salva os dados para o gerador de PDF
                 st.session_state.dados_grafico = dados_agrupados
                 st.session_state.tipo_grafico = tipo_grafico
                 st.session_state.eixo_x = eixo_x
                 st.session_state.eixos_y = eixos_y
             else:
                 st.session_state.dados_grafico = None
+        else:
+            st.session_state.dados_grafico = None
 
         st.markdown("---")
         st.header("Exportar Relatório")
@@ -391,4 +406,4 @@ else:
     st.info("Aguardando o upload dos arquivos para iniciar o processamento.")
 
 st.markdown("---")
-st.caption("Desenvolvido para General Water | v30.0 - Suporte via Teams")
+st.caption("Desenvolvido para General Water | v31.0 - Suporte via Teams")
